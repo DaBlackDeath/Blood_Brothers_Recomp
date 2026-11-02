@@ -1,3 +1,5 @@
+![crtfull](https://imglink.cc/cdn/r1bWtT00hK.png)
+
 # Blood Bros. (TAD Corporation, 1990) – statisch rekompilierter Windows-Port
 
 Windows-Port des Arcade-Spiels **Blood Bros.** (MAME-Set `bloodbro`). Das 68000-Programm des Spiels ist statisch
@@ -26,6 +28,9 @@ Läufe kompilieren ihn nur neu, wenn er sich geändert hat.
 
 Die exe ist eigenständig: `bloodbro.exe` und `roms\bloodbro.zip` in einen Ordner legen, fertig. Sie braucht nur
 Windows-Systembibliotheken (u. a. `opengl32.dll`).
+
+![0](https://imglink.cc/cdn/0scRPuMebI.png)![1](https://imglink.cc/cdn/ZGtEXASwyv.png)
+![2](https://imglink.cc/cdn/2ye0GZ_ofk.png)![3](https://imglink.cc/cdn/fgZ2i9eENS.png)
 
 ## Start und Launcher
 
