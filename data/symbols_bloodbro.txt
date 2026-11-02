@@ -1,0 +1,72 @@
+# Symbols for the Blood Bros. 68000 program (World set "bloodbro").
+# format:  ADDRESS  SIZE  NAME  description        (addresses in hex, SIZE in bytes)
+# Hardware and RAM layout come from the MAME driver; "verified" marks game variables that were
+# found by correlating RAM with what the game shows on screen and then confirmed by experiment.
+
+# ---- hardware (byte accesses on the odd address; see Machine::read8/write8) ----
+0x0a0001 1 SEIBU_TO_SOUND0   command byte 0 for the sound CPU
+0x0a0003 1 SEIBU_TO_SOUND1   command byte 1 for the sound CPU
+0x0a0005 1 SEIBU_FROM_SOUND0 reply byte 0 from the sound CPU (write: sound latch strobe)
+0x0a0007 1 SEIBU_FROM_SOUND1 reply byte 1 from the sound CPU
+0x0a0009 1 SEIBU_RST18       write: raises the sound CPU's RST 18 interrupt
+0x0a000b 1 SEIBU_PENDING     read: sound CPU has a pending command
+0x0a000d 1 SEIBU_PENDING_W   write: marks a command as pending
+0x0c001c 2 CRTC_LAYER_EN     layer enable, active low (bit0 BG, bit1 FG, bit3 text, bit4 sprites)
+0x0c0020 2 CRTC_BG_SCROLLX   background scroll X
+0x0c0022 2 CRTC_BG_SCROLLY   background scroll Y
+0x0c0024 2 CRTC_FG_SCROLLX   foreground scroll X
+0x0c0026 2 CRTC_FG_SCROLLY   foreground scroll Y
+0x0e0000 2 HW_DSW            DIP switches (active low)
+0x0e0002 2 HW_IN0            player inputs, P1 low byte, P2 high byte (active low)
+0x0e0004 2 HW_IN1            start buttons and service (active low)
+
+# ---- RAM regions (0x080000-0x08ffff) ----
+0x08b000 0x1000 SPRITE_RAM   512 sprites x 8 bytes
+0x08c000 0x0400 BG_VRAM      background tilemap 32x16
+0x08d000 0x0400 FG_VRAM      foreground tilemap 32x16
+0x08d800 0x0800 TX_VRAM      text layer 32x32 (low byte = ASCII for text)
+0x08e800 0x1000 PALETTE_RAM  2048 colours, xBGR444
+
+# ---- game variables (verified) ----
+0x08002d 1 G_CREDITS         credits, packed BCD
+0x085c14 4 G_TOP_SCORE       top score, packed BCD
+0x085c21 1 G_FOE_GAUGE       the "FOE" bar = enemies remaining in the stage (counts down as enemies die, 0 = stage clear)
+0x085c23 1 G_FOE_DRAINED     amount the FOE gauge has been reduced by
+0x085c28 1 G_STAGE_INDEX     stage, (area-1)*4 + (part-1): 0 = 1-1 ... 11 = 3-4 (the game adds 1 when a stage starts)
+0x080860 4 P1_SCORE          player 1 score, packed BCD
+0x08086c 1 P1_LIVES          player 1 lives (the HUD shows lives-1 blue circles)
+0x08086d 1 P1_DYNAMITE       player 1 dynamite, packed BCD
+0x080f20 4 P2_SCORE          player 2 score, packed BCD   (player structs are 0x6c0 apart)
+0x080f2c 1 P2_LIVES          player 2 lives
+0x080f2d 1 P2_DYNAMITE       player 2 dynamite, packed BCD
+
+# ---- code ----
+0x000410 0 reset_entry       first instruction after reset
+0x000456 0 irq4_vblank       VBLANK interrupt handler (the only interrupt used): frame timers, RNG
+0x0004f8 0 rng_update        updates the random number generator (seed at 0x080054, result byte at 0x080052)
+0x0055ae 0 restore_stage_index  copies the saved stage index (0x85c24) back, used when a game is continued
+0x0055ba 0 start_stage       sets up the next stage: clears flags, 3600-frame timer, stage index +1, parameters from table 0x00588e
+0x00597e 0 foe_gauge_update  converts defeated enemies (pending count at 0x85c22) into a lower FOE gauge
+0x0144aa 0 game_loop         main game: start sequence at 0x014640, per-frame update loop at 0x0146f8
+0x0146f8 0 frame_update_loop per-frame update: players, enemies, hits; checks the stage-clear flag (bit 6 of 0x080058)
+0x012cca 0 demo_start        attract-mode demo: picks a stage from a table and starts it
+0x01747e 0 object_script_step  steps an object's animation script; the end of a "level" script sets the stage-clear flag
+0x017038 0 stage_end_release_players  end-of-stage sequence: clears player bits and sets the stage-clear flag
+
+# ---- more variables (verified or deduced from code) ----
+0x080058 1 G_FLAGS           game flags: bit 6 = stage clear, bit 7 = frozen/paused, bit 3/2/1/0 = player/mode flags
+0x08002e 2 G_FRAME_TIMER     counts down from 3600 (60 s) every frame; 0x080030 counts the expired periods
+0x085c20 1 G_FOE_START       FOE gauge the stage starts with (from the stage table at 0x00588e), copied to 0x085c21
+0x085c22 1 G_FOE_PENDING     enemies defeated but not yet applied to the gauge, consumed by foe_gauge_update
+0x086c5a 1 G_SEQUENCE_STEP   step counter of the fade/transition state machine
+0x080054 4 G_RNG_SEED        random number generator state
+
+# ---- player objects (0x080820 = player 1, 0x080ee0 = player 2, 0x6c0 apart) ----
+0x080008 1 G_INVINCIBLE      never written by the game; if non-zero both player collision tests are skipped (0x017324, 0x01e76c)
+0x080820 0x6c0 PLAYER1_OBJ   player 1 object. +0x00 active, +0x01 bit1 = hit/protected, +0x30 state (index into table 0x015ede),
+                             +0x31 bit7 = "was hit" (consumed by player_death), +0x4c lives, +0x4d dynamite (BCD)
+0x080ee0 0x6c0 PLAYER2_OBJ   player 2 object, same layout
+0x0800a0 0x780 ENEMY_OBJECTS 20 enemy/projectile objects, 0x60 bytes each, tested by player_vs_enemies
+0x015f5e 0 player_update     per-player update: runs the state function selected by object+0x30
+0x017312 0 player_vs_enemies hit test: player against the 20 enemy objects; on a hit sets +0x31 bit 7 and state 0x20
+0x0169a4 0 player_death      when +0x31 bit 7 is set: clears it and takes a life (subq.b #1, +0x4c)
