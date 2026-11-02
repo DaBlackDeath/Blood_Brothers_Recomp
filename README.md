@@ -17,10 +17,10 @@ pacman -S --needed mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake \
                    mingw-w64-x86_64-ninja mingw-w64-x86_64-SDL2 mingw-w64-x86_64-python
 
 cd /pfad/zum/projekt          # roms/bloodbro.zip muss dort liegen
-bash los.sh
+bash go.sh
 ```
 
-`los.sh` erzeugt zuerst aus deinem ROM den rekompilierten Code (`tools/recomp_pipeline.sh` → `generated/`), baut dann
+`go.sh` erzeugt zuerst aus deinem ROM den rekompilierten Code (`tools/recomp_pipeline.sh` → `generated/`), baut dann
 `build/bloodbro.exe` und entfernt die Symbole. Das Übersetzen des generierten Codes dauert einige Minuten; spätere
 Läufe kompilieren ihn nur neu, wenn er sich geändert hat.
 
