@@ -1,7 +1,0 @@
-build*/
-generated/
-work/
-roms/*.zip
-*.png
-*.wav
-bloodbro.ini
