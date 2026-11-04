@@ -1,5 +1,6 @@
-![crtfull](https://imglink.cc/cdn/r1bWtT00hK.png)
-
+<p align="center">
+  <img src="https://imglink.cc/cdn/r1bWtT00hK.png" alt="BloodBros bezel">
+</p>
 # Blood Bros. (TAD Corporation, 1990) – statisch rekompilierter Windows-Port
 
 Windows-Port des Arcade-Spiels **Blood Bros.** (MAME-Set `bloodbro`). Das 68000-Programm des Spiels ist statisch
@@ -16,7 +17,8 @@ MSYS2 installieren (<https://www.msys2.org>), dann die **„MSYS2 MINGW64"**-She
 
 ```bash
 pacman -S --needed mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake \
-                   mingw-w64-x86_64-ninja mingw-w64-x86_64-SDL2 mingw-w64-x86_64-python
+                   mingw-w64-x86_64-ninja mingw-w64-x86_64-sdl3 mingw-w64-x86_64-python \
+                   mingw-w64-x86_64-vulkan-headers mingw-w64-x86_64-glslang
 
 cd /pfad/zum/projekt          # roms/bloodbro.zip muss dort liegen
 bash go.sh
@@ -27,21 +29,29 @@ bash go.sh
 Läufe kompilieren ihn nur neu, wenn er sich geändert hat.
 
 Die exe ist eigenständig: `bloodbro.exe` und `roms\bloodbro.zip` in einen Ordner legen, fertig. Sie braucht nur
-Windows-Systembibliotheken (u. a. `opengl32.dll`).
+Windows-Systembibliotheken (u. a. `opengl32.dll`); `vulkan-1.dll` bringt der Grafiktreiber mit und wird erst zur
+Laufzeit geladen (fehlt sie, läuft das Spiel mit OpenGL).
 
-![0](https://imglink.cc/cdn/0scRPuMebI.png)![1](https://imglink.cc/cdn/ZGtEXASwyv.png)
-![2](https://imglink.cc/cdn/2ye0GZ_ofk.png)![3](https://imglink.cc/cdn/fgZ2i9eENS.png)
+Vulkan-Header und `glslang` (übersetzt die Shader in `src/shaders/` beim Bauen nach SPIR-V) sind optional: Fehlen
+sie, baut CMake ohne Vulkan-Renderer (Warnung beim Konfigurieren); abschalten geht auch mit `-DBLOODBRO_VULKAN=OFF`.
 
 ## Start und Launcher
 
-- **Doppelklick auf `bloodbro.exe`** öffnet den Launcher. Er bearbeitet dieselbe `bloodbro.ini`, die auch das Spiel
-  liest und schreibt: ROM-Datei (mit Dateiauswahl), Ton, Video-Preset, Pixelfilter, Seitenverhältnis, Fenstergröße,
-  Vollbild, Integer-Skalierung, Bezel, VSync und die wichtigsten DIP-Schalter (Leben, Schwierigkeit, Bonusleben,
-  Continue, Münzen, Demo-Ton). **Spielen** speichert und startet das Spiel (`bloodbro.exe --play`). Der Launcher
-  wartet im Hintergrund und liest die INI nach dem Spielende neu ein, damit Änderungen aus den F1/F4-Menüs sichtbar
-  werden. Optional schließt er sich nach dem Start (`[launcher] close_after_start`).
+- **Doppelklick auf `bloodbro.exe`** öffnet den Launcher (Dear ImGui, mit Maus, Tastatur oder Gamepad bedienbar).
+  Er bearbeitet dieselbe `bloodbro.ini`, die auch das Spiel liest und schreibt, und hat fünf Seiten:
+  **Game** (ROM-Datei mit Dateiauswahl und CRC-Prüfung, Ton), **Video** (Fenstergröße, Seitenverhältnis, Vollbild,
+  Integer-Skalierung, VSync, Renderer, Preset, Pixelfilter, Bezel und alle CRT-Regler), **Controls** (Tasten, Gamepad-Belegung,
+  angeschlossene Pads), **Game Rules** (alle DIP-Schalter) und **Cheats** (dieselbe Liste wie im F2-Menü).
+  **PLAY** speichert und startet das Spiel (`bloodbro.exe --play`). Der Launcher wartet im Hintergrund und liest die
+  INI nach dem Spielende neu ein, damit Änderungen aus den F1/F2/F4-Menüs sichtbar werden. Optional schließt er sich
+  nach dem Start (`[launcher] close_after_start`) oder wird ganz übersprungen (`[launcher] skip`, dann startet ein
+  Doppelklick sofort das Spiel; mit gedrückter **Shift**-Taste erscheint der Launcher wieder).
 - **Mit Argumenten** (z. B. ZIP auf die exe ziehen, `bloodbro.exe roms\bloodbro.zip`, `--play`, `--fullscreen` …)
   startet direkt das Spiel. `bloodbro.exe --help` zeigt alle Optionen.
+
+<p align="center">
+  <img src="https://imglink.cc/cdn/0scRPuMebI.png" alt="BloodBros bezel">
+</p>
 
 ## Menüs, Einstellungen und Cheats
 
@@ -75,7 +85,23 @@ den Wert, Esc (B) schließt. Das Spiel ist angehalten, solange ein Menü offen i
 
 ## CRT-Shader (F4)
 
-Das Bild wird mit OpenGL 2.1 gezeichnet. Der Shader (`src/gl_renderer.cpp`, GLSL 1.20) rechnet in linearem Licht
+Das Bild wird mit **Vulkan** oder **OpenGL 2.1** gezeichnet; beide nutzen denselben CRT-Shader
+(`src/shaders/crt.frag` für Vulkan, GLSL 1.20 in `src/gl_renderer.cpp` für OpenGL – bei Änderungen beide anpassen).
+Welcher Renderer läuft, steht unter `[video] renderer=` in der INI, im Launcher (Video → Renderer) oder auf der
+Kommandozeile (`--renderer auto|vulkan|opengl|sdl`, gilt nur für diesen Start):
+
+<p align="center">
+  <img src="https://imglink.cc/cdn/fgZ2i9eENS.png" alt="BloodBros">
+</p>
+
+| Wert | Verhalten |
+| --- | --- |
+| `auto` (Standard) | Vulkan, sonst OpenGL, sonst SDL-Renderer |
+| `vulkan` / `opengl` | der gewählte, sonst der andere, sonst SDL-Renderer |
+| `sdl` | einfacher SDL-Renderer ohne Effekte (wie `--no-gl`) |
+
+Beim Start steht auf der Konsole, welcher Renderer und welche GPU benutzt werden. `BLOODBRO_VK_VALIDATION=1`
+schaltet die Vulkan-Validierung ein (wenn das Vulkan SDK installiert ist). Der Shader rechnet in linearem Licht
 und bietet:
 
 | Regler | Wirkung |
@@ -97,11 +123,11 @@ Presets: *Custom*, *Off (clean pixels)*, *Scanlines*, *CRT*, *CRT strong*, *CRT 
 Wählt man ein Preset und danach wieder *Custom* (im F4-Menü oder im Launcher), kommen sie genau so zurück, auch nach
 einem Neustart (`custom_*` in der INI). Seitenverhältnis und Integer-Skalierung gehören zu keinem Preset.
 Alles wird sofort angewendet und unter `[video]` in `bloodbro.ini` gespeichert. Auf der Kommandozeile:
-`--shader crt`, `--integer-scale`, `--no-gl`. Tipp: Für Scanlines die Fenstergröße so wählen, dass die Höhe ein
-Vielfaches von 224 ist (448, 672, 896 …), oder *Integer scaling* einschalten.
+`--shader crt`, `--integer-scale`, `--renderer NAME`. Tipp: Für Scanlines die Fenstergröße so wählen, dass die Höhe
+ein Vielfaches von 224 ist (448, 672, 896 …), oder *Integer scaling* einschalten.
 
-Steht OpenGL nicht zur Verfügung (alter Treiber, Remote-Desktop …), läuft das Spiel mit dem normalen SDL-Renderer
-weiter (ohne Effekte). Im Menü steht dann ein Hinweis, auf der Konsole der Grund.
+Stehen weder Vulkan noch OpenGL zur Verfügung (alter Treiber, Remote-Desktop …), läuft das Spiel mit dem normalen
+SDL-Renderer weiter (ohne Effekte). Im Menü steht dann ein Hinweis, auf der Konsole der Grund.
 
 ## Bezel (Monitorrahmen)
 
@@ -173,13 +199,15 @@ Geprüft gegen MAME 0.264 (gleiche Eingaben, gleiche Frames):
 ## Aufbau
 
 ```text
-src/main.cpp          SDL-Frontend, Eingabe, Audioausgabe, Testoptionen
-src/launcher.*        Launcher-Fenster (Win32), src/bloodbro.rc + .manifest
+src/main.cpp          SDL3-Frontend, Renderer-Auswahl, Eingabe, Audioausgabe, Testoptionen
+src/launcher.*        Launcher-Fenster (Dear ImGui, SDL3 + OpenGL 2), src/bloodbro.rc + .manifest
 src/machine.*         Speicherkarte 68000/Z80, Seibu-Sound-Interface, CRTC, Scheduling
 src/recomp_cpu.cpp    Dispatcher des rekompilierten 68000-Programms, src/cpu_backend.h Schnittstelle
 recomp/               Laufzeit des rekompilierten Codes (CPU-Zustand, Operationen)
 generated/            erzeugter Code (aus deinem ROM, nicht weitergeben)
 src/video.*           Tilemaps + Sprites (Software-Renderer)
+src/renderer.*        gemeinsame Schnittstelle der GPU-Renderer, Nachleuchten (CPU)
+src/vk_renderer.*     Vulkan-Renderer, src/shaders/ seine GLSL-Shader (beim Bauen → SPIR-V)
 src/gl_renderer.*     OpenGL-Renderer mit CRT-Shader, src/video_settings.h Presets und Optionen
 src/oki6295.*         OKI-ADPCM
 src/romset.*          ROM-Laden (ZIP/Ordner) mit CRC-Prüfung
@@ -189,7 +217,7 @@ src/bezel.*           Rahmenbild (PNG über stb_image) mit automatischer Fenster
 tests/                Tests für Menü, Presets, Cheat-Ausdrücke, INI und Bezel
 tools/                Pipeline, Generator, Analyse, Cheat-Einbettung, MAME-Vergleichsskripte
 data/                 Analyse- und Trace-Daten (nur Adressen), Zyklentabelle, Cheats, Symbole
-third_party/          superzazu/z80 (kleiner Patch), ymfm (YM3812), miniz, stb_image
+third_party/          superzazu/z80 (kleiner Patch), ymfm (YM3812), miniz, stb_image, Dear ImGui
 ```
 
 ## Tests und Debug-Hilfen
@@ -206,6 +234,6 @@ third_party/          superzazu/z80 (kleiner Patch), ymfm (YM3812), miniz, stb_i
 ## Lizenzen
 
 Eigener Code: noch nicht festgelegt. Fremdcode in `third_party/` behält seine Lizenz:
-superzazu/z80 (MIT), ymfm (BSD-3, A. Giles), miniz (MIT), stb_image (Public Domain/MIT).
-SDL2 (zlib-Lizenz) ist statisch eingebunden. Hardware-Wissen (Speicherkarte, Grafik-Layouts, Seibu-Interface)
+superzazu/z80 (MIT), ymfm (BSD-3, A. Giles), miniz (MIT), stb_image (Public Domain/MIT), Dear ImGui 1.93 (MIT, O. Cornut).
+SDL3 (zlib-Lizenz) ist statisch eingebunden. Hardware-Wissen (Speicherkarte, Grafik-Layouts, Seibu-Interface)
 stammt aus dem MAME-Treiber; die Zyklentabelle `data/m68k_cycles.bin` aus Musashi (K. Stenerud).

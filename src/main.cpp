@@ -1,4 +1,4 @@
-// Blood Bros. - Windows/SDL2 frontend
+// Blood Bros. - Windows/SDL3 frontend (Vulkan or OpenGL with the CRT shader, plain SDL renderer as fallback)
 //
 //   bloodbro [options] [romfile.zip | romdir]
 //
@@ -12,7 +12,8 @@
 #include <windows.h>
 #endif
 
-#include <SDL.h>
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_main.h>
 
 #include <algorithm>
 #include <cmath>
@@ -28,12 +29,12 @@
 #include "bezel.h"
 #include "cheats.h"
 #include "dips.h"
-#include "gl_renderer.h"
 #include "ini.h"
 #include "launcher.h"
 #include "machine.h"
 #include "menu.h"
 #include "miniz.h"
+#include "renderer.h"
 #include "romset.h"
 #include "video_settings.h"
 
@@ -69,7 +70,7 @@ struct Options {
     std::string menu_shot_page, menu_shot_file;          // --menu-shot dip:file.png | cheats:file.png
     bool dsw_given = false, rom_given = false;
     bool play = false;                  // --play: start the game directly (otherwise, without arguments, the launcher opens)
-    bool no_gl = false;                 // never try OpenGL (plain SDL renderer)
+    std::string renderer;               // --renderer auto|vulkan|opengl|sdl (empty: from bloodbro.ini)
     bool integer_scale = false;         // --integer-scale
     std::string bezel_file;             // --bezel FILE.png
     bool no_bezel = false;
@@ -125,7 +126,8 @@ void usage() {
         "  --cheat NAME[=N] switch a cheat on (N = parameter number, 0-based); repeatable\n"
         "  --menu-shot P:F  render menu page P (dip|cheats) into PNG F and exit (UI test)\n"
         "  --shader NAME    video preset: off, scanlines, crt, crtstrong (details in the F4 menu)\n"
-        "  --no-gl          do not use OpenGL (no CRT effects)\n"
+        "  --renderer NAME  auto (Vulkan, then OpenGL), vulkan, opengl or sdl (plain, no CRT effects)\n"
+        "  --no-gl          same as --renderer sdl\n"
         "  --open-menu P@F  open menu P (dip|cheats|video) at frame F, show it once and quit (UI test)\n"
         "  --bezel FILE     monitor frame picture (PNG with a transparent screen area); --no-bezel ignores bezel files\n"
         "  --integer-scale  scale the picture by whole numbers only (best for scanlines)\n"
@@ -164,7 +166,8 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--pad-debug") o.pad_debug = true;
         else if (a == "--watch-write") { const char* v = need("--watch-write"); if (!v) return false; o.watch_write = (uint32_t)std::strtoul(v, nullptr, 16); }
         else if (a == "--shader") { const char* v = need("--shader"); if (!v) return false; o.shader_preset = v; }
-        else if (a == "--no-gl") o.no_gl = true;
+        else if (a == "--no-gl") o.renderer = "sdl";
+        else if (a == "--renderer") { const char* v = need("--renderer"); if (!v) return false; o.renderer = v; }
         else if (a == "--integer-scale") o.integer_scale = true;
         else if (a == "--bezel") { const char* v = need("--bezel"); if (!v) return false; o.bezel_file = v; }
         else if (a == "--no-bezel") o.no_bezel = true;
@@ -320,7 +323,7 @@ struct Resampler {
 };
 
 uint32_t keyboard_state() {
-    const Uint8* k = SDL_GetKeyboardState(nullptr);
+    const bool* k = SDL_GetKeyboardState(nullptr);
     uint32_t b = 0;
     auto set = [&](SDL_Scancode sc, uint32_t bit) { if (k[sc]) b |= bit; };
     set(SDL_SCANCODE_UP, IN_P1_UP); set(SDL_SCANCODE_DOWN, IN_P1_DOWN);
@@ -335,12 +338,12 @@ uint32_t keyboard_state() {
     return b;
 }
 
-// A connected controller: either a recognised SDL GameController (known mapping) or a raw
+// A connected controller: either a recognised SDL gamepad (known mapping) or a raw
 // joystick (fallback for pads SDL has no mapping for).
 struct Pad {
-    SDL_GameController* gc = nullptr;
+    SDL_Gamepad* gc = nullptr;
     SDL_Joystick* js = nullptr;
-    SDL_JoystickID id = -1;
+    SDL_JoystickID id = 0;
     bool active() const { return gc || js; }
 };
 
@@ -353,35 +356,35 @@ uint32_t pad_state(const Pad& pad, bool second) {
     constexpr int kDead = 16000;
 
     if (pad.gc) {
-        SDL_GameController* g = pad.gc;
-        auto btn = [&](SDL_GameControllerButton x) { return SDL_GameControllerGetButton(g, x) != 0; };
-        const int ax = SDL_GameControllerGetAxis(g, SDL_CONTROLLER_AXIS_LEFTX);
-        const int ay = SDL_GameControllerGetAxis(g, SDL_CONTROLLER_AXIS_LEFTY);
-        up = btn(SDL_CONTROLLER_BUTTON_DPAD_UP) || ay < -kDead;
-        dn = btn(SDL_CONTROLLER_BUTTON_DPAD_DOWN) || ay > kDead;
-        lf = btn(SDL_CONTROLLER_BUTTON_DPAD_LEFT) || ax < -kDead;
-        rt = btn(SDL_CONTROLLER_BUTTON_DPAD_RIGHT) || ax > kDead;
-        b1 = btn(SDL_CONTROLLER_BUTTON_A);
-        b2 = btn(SDL_CONTROLLER_BUTTON_B);
-        b3 = btn(SDL_CONTROLLER_BUTTON_X) || btn(SDL_CONTROLLER_BUTTON_Y);
-        start = btn(SDL_CONTROLLER_BUTTON_START);
-        coin = btn(SDL_CONTROLLER_BUTTON_BACK);
+        SDL_Gamepad* g = pad.gc;
+        auto btn = [&](SDL_GamepadButton x) { return SDL_GetGamepadButton(g, x); };
+        const int ax = SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTX);
+        const int ay = SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTY);
+        up = btn(SDL_GAMEPAD_BUTTON_DPAD_UP) || ay < -kDead;
+        dn = btn(SDL_GAMEPAD_BUTTON_DPAD_DOWN) || ay > kDead;
+        lf = btn(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || ax < -kDead;
+        rt = btn(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || ax > kDead;
+        b1 = btn(SDL_GAMEPAD_BUTTON_SOUTH);    // A / cross
+        b2 = btn(SDL_GAMEPAD_BUTTON_EAST);     // B / circle
+        b3 = btn(SDL_GAMEPAD_BUTTON_WEST) || btn(SDL_GAMEPAD_BUTTON_NORTH);   // X / Y
+        start = btn(SDL_GAMEPAD_BUTTON_START);
+        coin = btn(SDL_GAMEPAD_BUTTON_BACK);
     } else {
         SDL_Joystick* j = pad.js;
-        const int naxes = SDL_JoystickNumAxes(j), nbtn = SDL_JoystickNumButtons(j);
-        const int nhats = SDL_JoystickNumHats(j);
+        const int naxes = SDL_GetNumJoystickAxes(j), nbtn = SDL_GetNumJoystickButtons(j);
+        const int nhats = SDL_GetNumJoystickHats(j);
         if (naxes >= 2) {
-            const int ax = SDL_JoystickGetAxis(j, 0), ay = SDL_JoystickGetAxis(j, 1);
+            const int ax = SDL_GetJoystickAxis(j, 0), ay = SDL_GetJoystickAxis(j, 1);
             lf = ax < -kDead; rt = ax > kDead; up = ay < -kDead; dn = ay > kDead;
         }
         if (nhats >= 1) {
-            const Uint8 h = SDL_JoystickGetHat(j, 0);
+            const Uint8 h = SDL_GetJoystickHat(j, 0);
             if (h & SDL_HAT_UP) up = true;
             if (h & SDL_HAT_DOWN) dn = true;
             if (h & SDL_HAT_LEFT) lf = true;
             if (h & SDL_HAT_RIGHT) rt = true;
         }
-        auto b = [&](int i) { return i < nbtn && SDL_JoystickGetButton(j, i) != 0; };
+        auto b = [&](int i) { return i < nbtn && SDL_GetJoystickButton(j, i); };
         // typical layout: 0..3 = A B X Y / cross circle square triangle; 6,8 = back/select; 7,9 = start
         b1 = b(0); b2 = b(1); b3 = b(2) || b(3);
         coin = b(6) || b(8);
@@ -413,26 +416,30 @@ uint32_t pad_state(const Pad& pad, bool second) {
     return r;
 }
 
-// Hotplug handling. `which` is a device index for ADDED events and an instance id for REMOVED.
-void pad_add(Pad* pads, int device_index) {
+// Hotplug handling (SDL3: `id` is the joystick instance id for ADDED and REMOVED events).
+void pad_add(Pad* pads, SDL_JoystickID id) {
     int slot = -1;
-    for (int i = 0; i < 2; i++)
-        if (!pads[i].active()) { slot = i; break; }
+    for (int i = 0; i < 2; i++) {
+        if (pads[i].active() && pads[i].id == id) return;   // already open (gamepad and joystick event for one device)
+        if (slot < 0 && !pads[i].active()) slot = i;
+    }
     if (slot < 0) return;
     Pad p;
-    if (SDL_IsGameController(device_index)) {
-        p.gc = SDL_GameControllerOpen(device_index);
+    if (SDL_IsGamepad(id)) {
+        p.gc = SDL_OpenGamepad(id);
         if (p.gc) {
-            p.id = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(p.gc));
-            std::printf("pad %d: %s (SDL game controller, mapped)\n", slot + 1, SDL_GameControllerName(p.gc));
+            p.id = id;
+            const char* name = SDL_GetGamepadName(p.gc);
+            std::printf("pad %d: %s (SDL gamepad, mapped)\n", slot + 1, name ? name : "?");
         }
     } else {
-        p.js = SDL_JoystickOpen(device_index);
+        p.js = SDL_OpenJoystick(id);
         if (p.js) {
-            p.id = SDL_JoystickInstanceID(p.js);
+            p.id = id;
+            const char* name = SDL_GetJoystickName(p.js);
             std::printf("pad %d: %s (raw joystick, %d axes %d buttons %d hats: fallback mapping)\n", slot + 1,
-                        SDL_JoystickName(p.js), SDL_JoystickNumAxes(p.js), SDL_JoystickNumButtons(p.js),
-                        SDL_JoystickNumHats(p.js));
+                        name ? name : "?", SDL_GetNumJoystickAxes(p.js), SDL_GetNumJoystickButtons(p.js),
+                        SDL_GetNumJoystickHats(p.js));
         }
     }
     if (p.active()) pads[slot] = p;
@@ -441,8 +448,8 @@ void pad_add(Pad* pads, int device_index) {
 void pad_remove(Pad* pads, SDL_JoystickID id) {
     for (int i = 0; i < 2; i++) {
         if (pads[i].active() && pads[i].id == id) {
-            if (pads[i].gc) SDL_GameControllerClose(pads[i].gc);
-            if (pads[i].js) SDL_JoystickClose(pads[i].js);
+            if (pads[i].gc) SDL_CloseGamepad(pads[i].gc);
+            if (pads[i].js) SDL_CloseJoystick(pads[i].js);
             pads[i] = Pad{};
             std::printf("pad %d disconnected\n", i + 1);
         }
@@ -528,12 +535,8 @@ void attach_console_if_needed() {
 }
 
 std::string exe_dir() {
-    std::string s = "./";
-    if (char* b = SDL_GetBasePath()) {
-        s = b;
-        SDL_free(b);
-    }
-    return s;
+    const char* b = SDL_GetBasePath();   // owned by SDL in SDL3
+    return b ? std::string(b) : std::string("./");
 }
 
 bool file_exists(const std::string& p) {
@@ -651,7 +654,8 @@ void recomp_fatal(const std::string& message) {
 int main(int argc, char** argv) {
 #ifdef _WIN32
     // started without arguments (double-click): the launcher window; it starts the game as "bloodbro.exe --play"
-    if (argc <= 1) return run_launcher();
+    // (unless the launcher is switched off: then the game starts at once with the settings from bloodbro.ini)
+    if (argc <= 1 && !launcher_skipped()) return run_launcher();
 #endif
     attach_console_if_needed();
 
@@ -669,6 +673,11 @@ int main(int argc, char** argv) {
     if (opt.linear) vs.filter = 1;
     if (opt.pixel_aspect) vs.aspect = 1;
     if (opt.integer_scale) vs.integer_scale = 1;
+    int renderer_choice = vs.renderer;   // --renderer only applies to this run (not saved to bloodbro.ini)
+    if (!opt.renderer.empty()) {
+        renderer_choice = VideoSettings::renderer_index(opt.renderer);
+        if (renderer_choice < 0) return fatal(gui, "Blood Bros. - option error", "Unknown --renderer '" + opt.renderer + "' (auto, vulkan, opengl, sdl).");
+    }
     Bezel bezel;   // optional monitor frame; used when vs.bezel is on
     if (gui && !opt.no_bezel) {
         const std::string bf = find_bezel_file(opt, ini, base);
@@ -776,82 +785,118 @@ int main(int argc, char** argv) {
     SDL_Texture* texture = nullptr;
     SDL_Texture* overlay_tex = nullptr;
     SDL_Texture* bezel_tex = nullptr;
-    std::unique_ptr<GlRenderer> gl;
-    SDL_AudioDeviceID audio = 0;
+    std::unique_ptr<GpuRenderer> gpu;    // Vulkan or OpenGL with the CRT shader; null: plain SDL renderer
+    SDL_AudioStream* audio = nullptr;    // SDL3: a stream bound to the default playback device
     Pad pads[2];
-    int audio_rate = 48000;
+    const int audio_rate = 48000;        // the stream converts to whatever the device uses
     Resampler resampler;
+    const bool vsync = !opt.use_ini || ini.get_bool("video", "vsync", true);
 
     g_pad_debug = opt.pad_debug;
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");  // keep pad input when the window is unfocused
-    Uint32 init_flags = SDL_INIT_EVENTS;
+    SDL_InitFlags init_flags = SDL_INIT_EVENTS;
     if (!opt.headless)
-        init_flags |= SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER | (opt.nosound ? 0 : SDL_INIT_AUDIO);
-    if (SDL_Init(init_flags) != 0) return fatal(gui, "Blood Bros. - SDL error", std::string("SDL could not start: ") + SDL_GetError());
+        init_flags |= SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD | (opt.nosound ? 0 : SDL_INIT_AUDIO);
+    if (!SDL_Init(init_flags)) return fatal(gui, "Blood Bros. - SDL error", std::string("SDL could not start: ") + SDL_GetError());
 
-    if (!opt.headless) {
-        const double start_aspect = vs.aspect == 1 ? (double)Video::kWidth / Video::kHeight : 4.0 / 3.0;
-        int ww = Video::kWidth * opt.scale;
-        int wh = (int)(ww / start_aspect);
-        if (bezel.valid() && vs.bezel && bezel.has_window) {   // the game window inside the frame gets the usual size
-            ww = (int)(Video::kWidth * opt.scale * (double)bezel.w / bezel.win_w + 0.5);
-            wh = (int)(ww * (double)bezel.h / bezel.w + 0.5);
-        }
-        const Uint32 wflags = SDL_WINDOW_RESIZABLE | (opt.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
-
-        // first choice: an OpenGL window (CRT shader); if that does not work, the plain SDL renderer
-        if (!opt.no_gl) {
-            SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-            SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
-            SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-            window = SDL_CreateWindow("Blood Bros.", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, ww, wh, wflags | SDL_WINDOW_OPENGL);
-            if (window) {
-                gl = std::make_unique<GlRenderer>();
-                std::string gerr;
-                if (gl->init(window, gerr)) {
-                    gl->set_vsync(!opt.use_ini || ini.get_bool("video", "vsync", true));
-                    if (bezel.valid()) gl->set_bezel(bezel.argb.data(), bezel.w, bezel.h);
-                    std::printf("video: %s\n", gl->info().c_str());
-                } else {
-                    std::fprintf(stderr, "OpenGL not usable (%s): using the plain renderer, no CRT effects\n", gerr.c_str());
-                    gl.reset();
-                    SDL_DestroyWindow(window);
-                    window = nullptr;
-                }
-            } else {
-                std::fprintf(stderr, "OpenGL window not possible (%s): using the plain renderer, no CRT effects\n", SDL_GetError());
+    // closes the window and everything that draws into it
+    auto close_video = [&]() {
+        gpu.reset();   // while the window still exists
+        if (bezel_tex) SDL_DestroyTexture(bezel_tex);
+        if (overlay_tex) SDL_DestroyTexture(overlay_tex);
+        if (texture) SDL_DestroyTexture(texture);
+        if (renderer) SDL_DestroyRenderer(renderer);
+        if (window) SDL_DestroyWindow(window);
+        bezel_tex = overlay_tex = texture = nullptr;
+        renderer = nullptr;
+        window = nullptr;
+    };
+    // Opens the window with the wanted renderer (0 auto, 1 Vulkan, 2 OpenGL, 3 SDL). If that does not work: the
+    // other GPU API, then the plain SDL renderer. The window stays hidden until a renderer works, so a failed
+    // Vulkan attempt does not flash a window.
+    auto open_video = [&](int choice, int ww, int wh, int wx, int wy, bool fs, std::string& err) -> bool {
+        const SDL_WindowFlags wflags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | (fs ? SDL_WINDOW_FULLSCREEN : 0);
+        std::vector<RendererApi> apis;
+        if (choice == 0 || choice == 1) apis.push_back(RendererApi::Vulkan);
+        if (choice == 0 || choice == 2) apis.push_back(RendererApi::OpenGL);
+        if (choice == 1 || choice == 2) apis.push_back(choice == 1 ? RendererApi::OpenGL : RendererApi::Vulkan);   // explicitly chosen: the other API as fallback
+        for (RendererApi api : apis) {
+            std::unique_ptr<GpuRenderer> r = make_renderer(api);
+            const char* api_name = api == RendererApi::Vulkan ? "Vulkan" : "OpenGL";
+            if (!r) {
+                std::fprintf(stderr, "%s: not built into this program\n", api_name);
+                continue;
             }
+            renderer_prepare_window(api);
+            window = SDL_CreateWindow("Blood Bros.", ww, wh, wflags | renderer_window_flag(api));
+            if (!window) {
+                std::fprintf(stderr, "%s window not possible (%s)\n", api_name, SDL_GetError());
+                continue;
+            }
+            std::string gerr;
+            if (r->init(window, vsync, gerr)) {
+                gpu = std::move(r);
+                break;
+            }
+            std::fprintf(stderr, "%s not usable (%s)\n", api_name, gerr.c_str());
+            r.reset();
+            SDL_DestroyWindow(window);
+            window = nullptr;
         }
-        if (!window) {
-            SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, vs.filter == 1 ? "1" : "0");
-            window = SDL_CreateWindow("Blood Bros.", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, ww, wh, wflags);
-            if (!window) return fatal(gui, "Blood Bros. - window error", std::string("Cannot create the window: ") + SDL_GetError());
-            renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-            if (!renderer) renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
-            if (!renderer) return fatal(gui, "Blood Bros. - video error", std::string("Cannot create the renderer: ") + SDL_GetError());
+        if (gpu) {
+            if (bezel.valid()) gpu->set_bezel(bezel.argb.data(), bezel.w, bezel.h);
+            std::printf("video: %s (%s)\n", gpu->api_name(), gpu->info().c_str());
+        } else {
+            if (choice != 3) std::fprintf(stderr, "no Vulkan or OpenGL: using the plain renderer, no CRT effects\n");
+            window = SDL_CreateWindow("Blood Bros.", ww, wh, wflags);
+            if (!window) { err = std::string("Cannot create the window: ") + SDL_GetError(); return false; }
+            renderer = SDL_CreateRenderer(window, nullptr);
+            if (!renderer) renderer = SDL_CreateRenderer(window, SDL_SOFTWARE_RENDERER);
+            if (!renderer) { err = std::string("Cannot create the renderer: ") + SDL_GetError(); close_video(); return false; }
+            SDL_SetRenderVSync(renderer, vsync ? 1 : 0);
             texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, Video::kWidth, Video::kHeight);
-            if (!texture) return fatal(gui, "Blood Bros. - video error", std::string("Cannot create the screen texture: ") + SDL_GetError());
+            if (!texture) { err = std::string("Cannot create the screen texture: ") + SDL_GetError(); close_video(); return false; }
+            SDL_SetTextureScaleMode(texture, vs.filter == 1 ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
             overlay_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, Menu::kWidth, Menu::kHeight);
-            if (overlay_tex) SDL_SetTextureBlendMode(overlay_tex, SDL_BLENDMODE_BLEND);
+            if (overlay_tex) {
+                SDL_SetTextureBlendMode(overlay_tex, SDL_BLENDMODE_BLEND);
+                SDL_SetTextureScaleMode(overlay_tex, SDL_SCALEMODE_NEAREST);
+            }
             if (bezel.valid()) {
-                SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");   // smooth when the frame is shown smaller than the image
                 bezel_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, bezel.w, bezel.h);
                 if (bezel_tex) {
                     SDL_UpdateTexture(bezel_tex, nullptr, bezel.argb.data(), bezel.w * 4);
                     SDL_SetTextureBlendMode(bezel_tex, SDL_BLENDMODE_BLEND);
+                    SDL_SetTextureScaleMode(bezel_tex, SDL_SCALEMODE_LINEAR);   // smooth when the frame is shown smaller than the image
                 }
-                SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, vs.filter == 1 ? "1" : "0");
             }
+            const char* rname = SDL_GetRendererName(renderer);
+            std::printf("video: SDL renderer (%s), no CRT effects\n", rname ? rname : "?");
         }
+        SDL_SetWindowPosition(window, wx, wy);
+        SDL_ShowWindow(window);
+        return true;
+    };
+    int start_w = 0, start_h = 0;   // window size at start-up (used when the window is reopened from fullscreen)
 
-        // pads are opened from the SDL_*DEVICEADDED events SDL queues at start-up (and on hotplug)
+    if (!opt.headless) {
+        const double start_aspect = vs.aspect == 1 ? (double)Video::kWidth / Video::kHeight : 4.0 / 3.0;
+        start_w = Video::kWidth * opt.scale;
+        start_h = (int)(start_w / start_aspect);
+        if (bezel.valid() && vs.bezel && bezel.has_window) {   // the game window inside the frame gets the usual size
+            start_w = (int)(Video::kWidth * opt.scale * (double)bezel.w / bezel.win_w + 0.5);
+            start_h = (int)(start_w * (double)bezel.h / bezel.w + 0.5);
+        }
+        std::string verr;
+        if (!open_video(renderer_choice, start_w, start_h, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, opt.fullscreen, verr))
+            return fatal(gui, "Blood Bros. - video error", verr);
+
+        // pads are opened from the SDL_EVENT_*_ADDED events SDL queues at start-up (and on hotplug)
 
         if (!opt.nosound) {
-            SDL_AudioSpec want{}, have{};
-            want.freq = 48000; want.format = AUDIO_S16SYS; want.channels = 2; want.samples = 1024;
-            audio = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
-            if (audio) audio_rate = have.freq;
-            else std::fprintf(stderr, "audio disabled: %s\n", SDL_GetError());
+            const SDL_AudioSpec spec{SDL_AUDIO_S16, 2, audio_rate};
+            audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);   // starts paused
+            if (!audio) std::fprintf(stderr, "audio disabled: %s\n", SDL_GetError());
         }
     }
     resampler.set_rates(Machine::audio_rate(), audio_rate);
@@ -882,13 +927,30 @@ int main(int argc, char** argv) {
         ini.save(ini_path, "; bloodbro.ini - settings of bloodbro.exe. Saved by the game (F1 = DIP switches, F2 = cheats).");
     };
 
+    int shown_renderer = vs.renderer;   // the setting the window was opened with (a change in the F4 menu reopens it)
+    bool reopen_video = false;
     std::function<void()> mh_video_changed = [&]() {
-        if (!gl && renderer) {
-            SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, vs.filter == 1 ? "1" : "0");
-            if (texture) SDL_DestroyTexture(texture);
-            texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, Video::kWidth, Video::kHeight);
-        }
+        if (!gpu && texture) SDL_SetTextureScaleMode(texture, vs.filter == 1 ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+        if (vs.renderer != shown_renderer) reopen_video = true;
         save_settings();
+    };
+    // F4 menu changed the renderer: open the window again (same place and size) with the new one
+    auto reopen = [&]() {
+        reopen_video = false;
+        shown_renderer = vs.renderer;
+        renderer_choice = vs.renderer;   // a --renderer from the command line no longer applies
+        if (!window) return;
+        int ww = start_w, wh = start_h, wx = SDL_WINDOWPOS_CENTERED, wy = SDL_WINDOWPOS_CENTERED;
+        if (!fullscreen) {
+            SDL_GetWindowSize(window, &ww, &wh);
+            SDL_GetWindowPosition(window, &wx, &wy);
+        }
+        close_video();
+        std::string verr;
+        if (!open_video(renderer_choice, ww, wh, wx, wy, fullscreen, verr)) {
+            fatal(gui, "Blood Bros. - video error", verr);
+            std::exit(1);
+        }
     };
 
     Menu menu;
@@ -902,8 +964,16 @@ int main(int argc, char** argv) {
         mh.cheats = n_cheats >= 0 ? &cheats : nullptr;
         mh.cheat_file_note = "No cheats available in this build.";
         mh.video = &vs;
-        mh.gl_available = gl != nullptr;
+        mh.shader_available = [&]() { return gpu != nullptr; };
         mh.bezel_available = bezel.valid();
+        mh.active_renderer = [&]() -> std::string {
+            if (gpu) return gpu->api_name();
+            if (renderer) {
+                const char* n = SDL_GetRendererName(renderer);
+                return std::string("SDL (") + (n ? n : "?") + ", no effects)";
+            }
+            return "none";
+        };
         mh.video_changed = [&]() { if (mh_video_changed) mh_video_changed(); };
         menu.set_hooks(mh);
         cheats.on_change = save_settings;
@@ -953,8 +1023,8 @@ int main(int argc, char** argv) {
 
     auto present = [&]() {
         int ow = 0, oh = 0;
-        if (gl) SDL_GL_GetDrawableSize(window, &ow, &oh);
-        else if (renderer) SDL_GetRendererOutputSize(renderer, &ow, &oh);
+        if (gpu) SDL_GetWindowSizeInPixels(window, &ow, &oh);
+        else if (renderer) SDL_GetCurrentRenderOutputSize(renderer, &ow, &oh);
         else return;
         const Layout lay = compute_layout(ow, oh);
         const SDL_Rect dst = lay.game;
@@ -964,31 +1034,42 @@ int main(int argc, char** argv) {
             ov = overlay_px.data();
         }
         const Shot* shot = want_screen_shot();
-        if (gl) {
-            gl->draw(machine.framebuffer(), Video::kWidth, Video::kHeight, vs, ow, oh, dst, ov, Menu::kWidth, Menu::kHeight,
-                     lay.use_bezel ? &lay.bezel : nullptr, lay.bezel_on_top);
+        if (gpu) {
+            gpu->draw(machine.framebuffer(), Video::kWidth, Video::kHeight, vs, ow, oh, dst, ov, Menu::kWidth, Menu::kHeight,
+                      lay.use_bezel ? &lay.bezel : nullptr, lay.bezel_on_top);
             if (shot) {
                 std::vector<uint32_t> px;
                 int w, h;
-                if (gl->read_pixels(px, w, h) && save_png(shot->file, px.data(), w, h)) std::printf("saved %s (window, frame %llu)\n", shot->file.c_str(), (unsigned long long)shot->frame);
+                if (gpu->read_pixels(px, w, h) && save_png(shot->file, px.data(), w, h)) std::printf("saved %s (window, frame %llu)\n", shot->file.c_str(), (unsigned long long)shot->frame);
             }
-            gl->swap();
+            gpu->present();
             return;
         }
+        auto frect = [](const SDL_Rect& r) { return SDL_FRect{(float)r.x, (float)r.y, (float)r.w, (float)r.h}; };
+        const SDL_FRect fdst = frect(dst), fbezel = frect(lay.bezel);
         SDL_UpdateTexture(texture, nullptr, machine.framebuffer(), Video::kWidth * 4);
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
-        if (lay.use_bezel && bezel_tex && !lay.bezel_on_top) SDL_RenderCopy(renderer, bezel_tex, nullptr, &lay.bezel);
-        SDL_RenderCopy(renderer, texture, nullptr, &dst);
-        if (lay.use_bezel && bezel_tex && lay.bezel_on_top) SDL_RenderCopy(renderer, bezel_tex, nullptr, &lay.bezel);
+        if (lay.use_bezel && bezel_tex && !lay.bezel_on_top) SDL_RenderTexture(renderer, bezel_tex, nullptr, &fbezel);
+        SDL_RenderTexture(renderer, texture, nullptr, &fdst);
+        if (lay.use_bezel && bezel_tex && lay.bezel_on_top) SDL_RenderTexture(renderer, bezel_tex, nullptr, &fbezel);
         if (ov && overlay_tex) {
             SDL_UpdateTexture(overlay_tex, nullptr, ov, Menu::kWidth * 4);
-            SDL_RenderCopy(renderer, overlay_tex, nullptr, &dst);
+            SDL_RenderTexture(renderer, overlay_tex, nullptr, &fdst);
         }
         if (shot) {
-            std::vector<uint32_t> px((size_t)ow * oh);
-            if (SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888, px.data(), ow * 4) == 0 && save_png(shot->file, px.data(), ow, oh))
-                std::printf("saved %s (window, frame %llu)\n", shot->file.c_str(), (unsigned long long)shot->frame);
+            bool saved = false;
+            if (SDL_Surface* s = SDL_RenderReadPixels(renderer, nullptr)) {
+                if (SDL_Surface* c = SDL_ConvertSurface(s, SDL_PIXELFORMAT_ARGB8888)) {
+                    std::vector<uint32_t> px((size_t)c->w * c->h);
+                    for (int y = 0; y < c->h; y++)
+                        std::memcpy(&px[(size_t)y * c->w], (const uint8_t*)c->pixels + (size_t)y * c->pitch, (size_t)c->w * 4);
+                    saved = save_png(shot->file, px.data(), c->w, c->h);
+                    SDL_DestroySurface(c);
+                }
+                SDL_DestroySurface(s);
+            }
+            if (saved) std::printf("saved %s (window, frame %llu)\n", shot->file.c_str(), (unsigned long long)shot->frame);
         }
         SDL_RenderPresent(renderer);
     };
@@ -1000,20 +1081,20 @@ int main(int argc, char** argv) {
     while (!quit) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
-            if (e.type == SDL_QUIT) quit = true;
-            else if (e.type == SDL_CONTROLLERDEVICEADDED) pad_add(pads, e.cdevice.which);
-            else if (e.type == SDL_CONTROLLERDEVICEREMOVED) pad_remove(pads, e.cdevice.which);
-            else if (e.type == SDL_JOYDEVICEADDED) {
-                if (!SDL_IsGameController(e.jdevice.which)) pad_add(pads, e.jdevice.which);  // unmapped pad: raw fallback
-            } else if (e.type == SDL_JOYDEVICEREMOVED) pad_remove(pads, e.jdevice.which);
-            else if (g_pad_debug && e.type == SDL_JOYBUTTONDOWN)
+            if (e.type == SDL_EVENT_QUIT) quit = true;
+            else if (e.type == SDL_EVENT_GAMEPAD_ADDED) pad_add(pads, e.gdevice.which);
+            else if (e.type == SDL_EVENT_GAMEPAD_REMOVED) pad_remove(pads, e.gdevice.which);
+            else if (e.type == SDL_EVENT_JOYSTICK_ADDED) {
+                if (!SDL_IsGamepad(e.jdevice.which)) pad_add(pads, e.jdevice.which);  // unmapped pad: raw fallback
+            } else if (e.type == SDL_EVENT_JOYSTICK_REMOVED) pad_remove(pads, e.jdevice.which);
+            else if (g_pad_debug && e.type == SDL_EVENT_JOYSTICK_BUTTON_DOWN)
                 std::printf("joy %d button %d down\n", (int)e.jbutton.which, (int)e.jbutton.button);
-            else if (g_pad_debug && e.type == SDL_JOYAXISMOTION && std::abs(e.jaxis.value) > 16000)
+            else if (g_pad_debug && e.type == SDL_EVENT_JOYSTICK_AXIS_MOTION && std::abs(e.jaxis.value) > 16000)
                 std::printf("joy %d axis %d = %d\n", (int)e.jaxis.which, (int)e.jaxis.axis, (int)e.jaxis.value);
-            else if (g_pad_debug && e.type == SDL_JOYHATMOTION)
+            else if (g_pad_debug && e.type == SDL_EVENT_JOYSTICK_HAT_MOTION)
                 std::printf("joy %d hat %d = %d\n", (int)e.jhat.which, (int)e.jhat.hat, (int)e.jhat.value);
-            else if (e.type == SDL_KEYDOWN && menu.active()) {
-                const SDL_Keycode k = e.key.keysym.sym;
+            else if (e.type == SDL_EVENT_KEY_DOWN && menu.active()) {
+                const SDL_Keycode k = e.key.key;
                 if (k == SDLK_UP) menu.key(Menu::Key::Up);
                 else if (k == SDLK_DOWN) menu.key(Menu::Key::Down);
                 else if (k == SDLK_LEFT) menu.key(Menu::Key::Left);
@@ -1025,41 +1106,43 @@ int main(int argc, char** argv) {
                 else if (!e.key.repeat && k == SDLK_F4) menu.toggle(Menu::Page::Video);
                 else if (!e.key.repeat && k == SDLK_F3) machine.reset();
             }
-            else if (menu.active() && e.type == SDL_CONTROLLERBUTTONDOWN) {
-                switch (e.cbutton.button) {
-                case SDL_CONTROLLER_BUTTON_DPAD_UP: menu.key(Menu::Key::Up); break;
-                case SDL_CONTROLLER_BUTTON_DPAD_DOWN: menu.key(Menu::Key::Down); break;
-                case SDL_CONTROLLER_BUTTON_DPAD_LEFT: menu.key(Menu::Key::Left); break;
-                case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: menu.key(Menu::Key::Right); break;
-                case SDL_CONTROLLER_BUTTON_A: menu.key(Menu::Key::Enter); break;
-                case SDL_CONTROLLER_BUTTON_B: menu.key(Menu::Key::Back); break;
+            else if (menu.active() && e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+                switch (e.gbutton.button) {
+                case SDL_GAMEPAD_BUTTON_DPAD_UP: menu.key(Menu::Key::Up); break;
+                case SDL_GAMEPAD_BUTTON_DPAD_DOWN: menu.key(Menu::Key::Down); break;
+                case SDL_GAMEPAD_BUTTON_DPAD_LEFT: menu.key(Menu::Key::Left); break;
+                case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: menu.key(Menu::Key::Right); break;
+                case SDL_GAMEPAD_BUTTON_SOUTH: menu.key(Menu::Key::Enter); break;
+                case SDL_GAMEPAD_BUTTON_EAST: menu.key(Menu::Key::Back); break;
                 default: break;
                 }
             }
-            else if (menu.active() && e.type == SDL_JOYHATMOTION && !SDL_GameControllerFromInstanceID(e.jhat.which)) {
+            else if (menu.active() && e.type == SDL_EVENT_JOYSTICK_HAT_MOTION && !SDL_GetGamepadFromID(e.jhat.which)) {
                 if (e.jhat.value & SDL_HAT_UP) menu.key(Menu::Key::Up);
                 else if (e.jhat.value & SDL_HAT_DOWN) menu.key(Menu::Key::Down);
                 else if (e.jhat.value & SDL_HAT_LEFT) menu.key(Menu::Key::Left);
                 else if (e.jhat.value & SDL_HAT_RIGHT) menu.key(Menu::Key::Right);
             }
-            else if (menu.active() && e.type == SDL_JOYBUTTONDOWN && !SDL_GameControllerFromInstanceID(e.jbutton.which)) {
+            else if (menu.active() && e.type == SDL_EVENT_JOYSTICK_BUTTON_DOWN && !SDL_GetGamepadFromID(e.jbutton.which)) {
                 if (e.jbutton.button == 0) menu.key(Menu::Key::Enter);
                 else if (e.jbutton.button == 1) menu.key(Menu::Key::Back);
             }
-            else if (e.type == SDL_KEYDOWN && !e.key.repeat) {
-                if (e.key.keysym.sym == SDLK_F1 && window) menu.toggle(Menu::Page::Dip);
-                else if (e.key.keysym.sym == SDLK_F2 && window) menu.toggle(Menu::Page::Cheats);
-                else if (e.key.keysym.sym == SDLK_F4 && window) menu.toggle(Menu::Page::Video);
-                else if (e.key.keysym.sym == SDLK_ESCAPE) quit = true;
-else if (e.key.keysym.sym == SDLK_F10 && window) {
+            else if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) {
+                const SDL_Keycode k = e.key.key;
+                if (k == SDLK_F1 && window) menu.toggle(Menu::Page::Dip);
+                else if (k == SDLK_F2 && window) menu.toggle(Menu::Page::Cheats);
+                else if (k == SDLK_F4 && window) menu.toggle(Menu::Page::Video);
+                else if (k == SDLK_ESCAPE) quit = true;
+                else if (k == SDLK_F10 && window) {
                     vs.filter = (vs.filter + 1) % 3;   // sharp -> linear -> nearest
                     if (mh_video_changed) mh_video_changed();
-                } else if (e.key.keysym.sym == SDLK_F11 && window) {
+                } else if (k == SDLK_F11 && window) {
                     fullscreen = !fullscreen;
-                    SDL_SetWindowFullscreen(window, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+                    SDL_SetWindowFullscreen(window, fullscreen);   // borderless desktop fullscreen
                 }
             }
         }
+        if (reopen_video) reopen();
 
         if (!opt.open_menu_page.empty() && !menu.active() && machine.frame_count() == opt.open_menu_frame)
             menu.open(opt.open_menu_page == "cheats" ? Menu::Page::Cheats : opt.open_menu_page == "video" ? Menu::Page::Video : Menu::Page::Dip);
@@ -1067,8 +1150,8 @@ else if (e.key.keysym.sym == SDLK_F10 && window) {
         // ---- menu open: the game is paused, only the picture and the menu are drawn ----
         if (menu.active()) {
             if (!menu_was_active && audio) {
-                SDL_PauseAudioDevice(audio, 1);
-                SDL_ClearQueuedAudio(audio);
+                SDL_PauseAudioStreamDevice(audio);
+                SDL_ClearAudioStream(audio);
                 audio_started = false;
             }
             menu_was_active = true;
@@ -1153,13 +1236,14 @@ else if (e.key.keysym.sym == SDLK_F10 && window) {
         if (audio) {
             stereo.clear();
             resampler.process(frame_audio, stereo);
-            SDL_QueueAudio(audio, stereo.data(), (Uint32)(stereo.size() * sizeof(int16_t)));
-            if (!audio_started && SDL_GetQueuedAudioSize(audio) >= bytes_per_frame * 3) {
-                SDL_PauseAudioDevice(audio, 0);
+            SDL_PutAudioStreamData(audio, stereo.data(), (int)(stereo.size() * sizeof(int16_t)));
+            auto queued = [&]() { return (size_t)std::max(0, SDL_GetAudioStreamQueued(audio)); };
+            if (!audio_started && queued() >= bytes_per_frame * 3) {
+                SDL_ResumeAudioStreamDevice(audio);
                 audio_started = true;
             }
             if (!opt.nothrottle)
-                while (SDL_GetQueuedAudioSize(audio) > bytes_per_frame * 4 && !quit) SDL_Delay(1);
+                while (queued() > bytes_per_frame * 4 && !quit) SDL_Delay(1);
         } else if (!opt.nothrottle && !opt.headless) {
             next_frame += (Uint64)(frame_time * (double)freq);
             const Uint64 now = SDL_GetPerformanceCounter();
@@ -1195,17 +1279,12 @@ else if (e.key.keysym.sym == SDLK_F10 && window) {
             std::printf("wrote %s (%zu samples)\n", opt.wav.c_str(), wav_audio.size());
     }
 
-    if (audio) SDL_CloseAudioDevice(audio);
+    if (audio) SDL_DestroyAudioStream(audio);
     for (Pad& p : pads) {
-        if (p.gc) SDL_GameControllerClose(p.gc);
-        if (p.js) SDL_JoystickClose(p.js);
+        if (p.gc) SDL_CloseGamepad(p.gc);
+        if (p.js) SDL_CloseJoystick(p.js);
     }
-    gl.reset();  // while the window still exists
-    if (bezel_tex) SDL_DestroyTexture(bezel_tex);
-    if (overlay_tex) SDL_DestroyTexture(overlay_tex);
-    if (texture) SDL_DestroyTexture(texture);
-    if (renderer) SDL_DestroyRenderer(renderer);
-    if (window) SDL_DestroyWindow(window);
+    close_video();
     SDL_Quit();
     return 0;
 }

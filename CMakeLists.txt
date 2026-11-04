@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.13)
+cmake_minimum_required(VERSION 3.16)
 project(bloodbro_recomp C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -9,8 +9,35 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-find_package(SDL2 REQUIRED)
+find_package(SDL3 REQUIRED CONFIG)
 find_package(OpenGL REQUIRED)
+
+# The SDL3 library to link: the static one on MinGW (one self-contained exe), otherwise the shared one.
+if(MINGW)
+  if(NOT TARGET SDL3::SDL3-static)
+    message(FATAL_ERROR "the static SDL3 library is missing (MSYS2: pacman -S mingw-w64-x86_64-sdl3)")
+  endif()
+  set(BB_SDL3 SDL3::SDL3-static)
+elseif(TARGET SDL3::SDL3)
+  set(BB_SDL3 SDL3::SDL3)
+else()
+  set(BB_SDL3 SDL3::SDL3-static)
+endif()
+
+# --- Vulkan renderer (optional): needs the Vulkan headers and glslang to compile the shaders to SPIR-V.
+# No Vulkan library is linked: SDL loads vulkan-1.dll at run time (it comes with the graphics driver).
+option(BLOODBRO_VULKAN "Build the Vulkan renderer" ON)
+set(BB_HAVE_VULKAN OFF)
+if(BLOODBRO_VULKAN)
+  find_path(VULKAN_HEADERS_DIR vulkan/vulkan.h HINTS $ENV{VULKAN_SDK}/include)
+  find_program(GLSLANG_EXE NAMES glslang glslangValidator HINTS $ENV{VULKAN_SDK}/bin)
+  if(VULKAN_HEADERS_DIR AND GLSLANG_EXE)
+    set(BB_HAVE_VULKAN ON)
+  else()
+    message(WARNING "Vulkan renderer disabled: Vulkan headers or glslang not found "
+                    "(MSYS2: pacman -S mingw-w64-x86_64-vulkan-headers mingw-w64-x86_64-glslang)")
+  endif()
+endif()
 
 set(TP ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
@@ -49,28 +76,70 @@ set(BLOODBRO_SOURCES
   src/cheats.cpp
   src/ini.cpp
   src/menu.cpp
+  src/renderer.cpp
   src/gl_renderer.cpp
   src/bezel.cpp
   src/romset.cpp)
+
+if(BB_HAVE_VULKAN)
+  # src/shaders/*.vert|frag -> build/shaders/<name>_spv.h (const uint32_t k<Name>Spv[] with the SPIR-V words)
+  set(BB_SHADER_OUT ${CMAKE_CURRENT_BINARY_DIR}/shaders)
+  file(MAKE_DIRECTORY ${BB_SHADER_OUT})
+  set(BB_SHADER_HEADERS)
+  foreach(sh quad.vert:kQuadVertSpv crt.frag:kCrtFragSpv blit.frag:kBlitFragSpv)
+    string(REPLACE ":" ";" parts ${sh})
+    list(GET parts 0 file)
+    list(GET parts 1 var)
+    string(REPLACE "." "_" stem ${file})
+    set(out ${BB_SHADER_OUT}/${stem}_spv.h)
+    add_custom_command(
+      OUTPUT ${out}
+      COMMAND ${GLSLANG_EXE} -V --target-env vulkan1.0 --vn ${var} -o ${out} ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/${file}
+      DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/${file}
+      COMMENT "SPIR-V: ${file}"
+      VERBATIM)
+    list(APPEND BB_SHADER_HEADERS ${out})
+  endforeach()
+  list(APPEND BLOODBRO_SOURCES src/vk_renderer.cpp ${BB_SHADER_HEADERS})
+  # Vulkan structs are written as T x{VK_STRUCTURE_TYPE_...}: the remaining members are zero-initialised on purpose
+  set_source_files_properties(src/vk_renderer.cpp PROPERTIES COMPILE_OPTIONS "-Wno-missing-field-initializers")
+endif()
+
 if(WIN32)
-  # the launcher window (bloodbro.exe without arguments) and the manifest for its controls
+  # the launcher window (bloodbro.exe without arguments, Dear ImGui) and the program manifest
   enable_language(RC)
   list(APPEND BLOODBRO_SOURCES src/launcher.cpp src/bloodbro.rc)
-  # its texts use the Windows ANSI code page, like the paths in bloodbro.ini
-  set_source_files_properties(src/launcher.cpp PROPERTIES COMPILE_OPTIONS "-fexec-charset=CP1252")
+
+  # --- Dear ImGui (MIT) with the SDL3 and OpenGL 2 backends ---
+  add_library(imgui STATIC
+    ${TP}/imgui/imgui.cpp
+    ${TP}/imgui/imgui_draw.cpp
+    ${TP}/imgui/imgui_tables.cpp
+    ${TP}/imgui/imgui_widgets.cpp
+    ${TP}/imgui/imgui_impl_sdl3.cpp
+    ${TP}/imgui/imgui_impl_opengl2.cpp)
+  target_include_directories(imgui PUBLIC ${TP}/imgui)
+  target_include_directories(imgui PRIVATE $<TARGET_PROPERTY:${BB_SDL3},INTERFACE_INCLUDE_DIRECTORIES>)
+  target_compile_options(imgui PRIVATE -w -O2)
+  target_link_libraries(imgui PUBLIC OpenGL::GL imm32)   # imm32: IME support of the text fields
 endif()
 
 add_executable(bloodbro ${BLOODBRO_SOURCES})
 target_include_directories(bloodbro PRIVATE recomp generated third_party/stb)
-target_link_libraries(bloodbro PRIVATE z80core ymfm miniz OpenGL::GL)
+target_link_libraries(bloodbro PRIVATE z80core ymfm miniz OpenGL::GL ${BB_SDL3})
+if(BB_HAVE_VULKAN)
+  target_compile_definitions(bloodbro PRIVATE BLOODBRO_HAVE_VULKAN VK_NO_PROTOTYPES)
+  target_include_directories(bloodbro PRIVATE ${BB_SHADER_OUT})
+  target_include_directories(bloodbro SYSTEM PRIVATE ${VULKAN_HEADERS_DIR})
+endif()
+if(WIN32)
+  target_link_libraries(bloodbro PRIVATE imgui)
+endif()
 target_compile_options(bloodbro PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
 if(MINGW)
-  # one self-contained exe: SDL2, libstdc++, libgcc and winpthread linked in (only Windows system DLLs remain)
-  if(NOT TARGET SDL2::SDL2-static)
-    message(FATAL_ERROR "the static SDL2 library is missing (MSYS2: pacman -S mingw-w64-x86_64-SDL2)")
-  endif()
-  target_link_libraries(bloodbro PRIVATE mingw32 SDL2::SDL2main SDL2::SDL2-static comdlg32)
+  # one self-contained exe: SDL3, libstdc++, libgcc and winpthread linked in (only Windows system DLLs remain)
+  target_link_libraries(bloodbro PRIVATE comdlg32)
   target_link_options(bloodbro PRIVATE -static)
   # GUI program: no console window opens when the game is started by double-click. When it is started
   # from a terminal, the program attaches to that terminal (see attach_console_if_needed()).
@@ -78,11 +147,6 @@ if(MINGW)
   if(NOT BLOODBRO_CONSOLE)
     target_link_options(bloodbro PRIVATE -mwindows)
   endif()
-elseif(TARGET SDL2::SDL2)
-  target_link_libraries(bloodbro PRIVATE SDL2::SDL2)
-else()
-  target_include_directories(bloodbro PRIVATE ${SDL2_INCLUDE_DIRS})
-  target_link_libraries(bloodbro PRIVATE ${SDL2_LIBRARIES})
 endif()
 
 # stb_image.h defines a few helpers that this program does not use

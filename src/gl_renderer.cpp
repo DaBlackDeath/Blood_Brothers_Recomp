@@ -1,6 +1,6 @@
 #include "gl_renderer.h"
 
-#include <SDL_opengl.h>
+#include <SDL3/SDL_opengl.h>
 
 #include <algorithm>
 #include <cmath>
@@ -172,7 +172,7 @@ void quad() {
 
 }  // namespace
 
-bool GlRenderer::init(SDL_Window* window, std::string& error) {
+bool GlRenderer::init(SDL_Window* window, bool vsync, std::string& error) {
     window_ = window;
     SDL_GLContext ctx = SDL_GL_CreateContext(window);
     if (!ctx) {
@@ -180,6 +180,7 @@ bool GlRenderer::init(SDL_Window* window, std::string& error) {
         return false;
     }
     context_ = ctx;
+    SDL_GL_MakeCurrent(window, ctx);
     const char* ver = (const char*)glGetString(GL_VERSION);
     const char* rend = (const char*)glGetString(GL_RENDERER);
     info_ = std::string(rend ? rend : "?") + ", OpenGL " + (ver ? ver : "?");
@@ -192,7 +193,7 @@ bool GlRenderer::init(SDL_Window* window, std::string& error) {
         shutdown();
         return false;
     }
-    SDL_GL_SetSwapInterval(1);
+    set_vsync(vsync);
     glGenTextures(1, &tex_game_);
     glGenTextures(1, &tex_overlay_);
     setup_texture(tex_game_);
@@ -234,7 +235,7 @@ void GlRenderer::shutdown() {
         if (tex_game_) glDeleteTextures(1, &tex_game_);
         if (tex_overlay_) glDeleteTextures(1, &tex_overlay_);
         if (tex_bezel_) glDeleteTextures(1, &tex_bezel_);
-        SDL_GL_DeleteContext((SDL_GLContext)context_);
+        SDL_GL_DestroyContext(context_);
         context_ = nullptr;
     }
     prog_ = tex_game_ = tex_overlay_ = tex_bezel_ = 0;
@@ -312,43 +313,8 @@ void GlRenderer::draw(const uint32_t* game, int gw, int gh, const VideoSettings&
     glDisable(GL_TEXTURE_2D);
 }
 
-// Each phosphor dot keeps glowing after the beam has passed: per channel the shown light is the new picture or the
-// faded previous light, whichever is brighter. Done in linear light on the 256x224 picture, so it is cheap on the CPU.
-const uint32_t* GlRenderer::afterglow(const uint32_t* game, int w, int h, int persistence) {
-    const size_t n = (size_t)w * h;
-    if (persistence <= 0) {
-        glow_lin_.clear();
-        return game;
-    }
-    static float to_lin[256];
-    static uint8_t to_srgb[4096];
-    static bool tables = false;
-    if (!tables) {
-        for (int i = 0; i < 256; i++) to_lin[i] = std::pow(i / 255.f, 2.2f);
-        for (int i = 0; i < 4096; i++) to_srgb[i] = (uint8_t)(std::pow(i / 4095.f, 1.f / 2.2f) * 255.f + 0.5f);
-        tables = true;
-    }
-    // fraction of the light left after one frame (60 Hz): 100% -> about 0.85, a trail of roughly half a second
-    const float decay = 0.85f * std::pow(persistence / 100.f, 0.5f);
-    if (glow_lin_.size() != n * 3) glow_lin_.assign(n * 3, 0.f);
-    glow_px_.resize(n);
-    float* g = glow_lin_.data();
-    for (size_t i = 0; i < n; i++, g += 3) {
-        const uint32_t p = game[i];
-        uint32_t out = 0xFF000000u;
-        for (int c = 0; c < 3; c++) {
-            const int shift = 16 - 8 * c;
-            const float v = std::max(to_lin[(p >> shift) & 0xFF], g[c] * decay);
-            g[c] = v;
-            out |= (uint32_t)to_srgb[(int)(v * 4095.f + 0.5f)] << shift;
-        }
-        glow_px_[i] = out;
-    }
-    return glow_px_.data();
-}
-
 bool GlRenderer::read_pixels(std::vector<uint32_t>& out, int& w, int& h) {
-    SDL_GL_GetDrawableSize(window_, &w, &h);
+    SDL_GetWindowSizeInPixels(window_, &w, &h);
     if (w <= 0 || h <= 0) return false;
     std::vector<uint32_t> raw((size_t)w * h);
     glReadBuffer(GL_BACK);
@@ -360,6 +326,6 @@ bool GlRenderer::read_pixels(std::vector<uint32_t>& out, int& w, int& h) {
     return true;
 }
 
-void GlRenderer::swap() { SDL_GL_SwapWindow(window_); }
+void GlRenderer::present() { SDL_GL_SwapWindow(window_); }
 
 void GlRenderer::set_vsync(bool on) { SDL_GL_SetSwapInterval(on ? 1 : 0); }

@@ -81,6 +81,9 @@ const VParam kVParams[] = {
 };
 constexpr int kVParamCount = (int)(sizeof(kVParams) / sizeof(kVParams[0]));
 constexpr int kPresetRef = 100;
+constexpr int kRendererRef = 101;
+const char* const kRendererMenuLabels[] = {"Automatic", "Vulkan", "OpenGL", "SDL (no effects)"};
+constexpr int kRendererCount = (int)(sizeof(kRendererMenuLabels) / sizeof(kRendererMenuLabels[0]));
 
 std::string video_value(const VideoSettings& v, const VParam& p) {
     const int x = v.*(p.field);
@@ -141,6 +144,7 @@ void Menu::build_rows() {
         const VideoSettings& v = *hooks_.video;
         int np;
         const VideoSettings::Preset* pr = VideoSettings::presets(np);
+        rows_.push_back({"Renderer",kRendererMenuLabels[VideoSettings::clamp(v.renderer, 0, kRendererCount - 1)], 1, kRendererRef, false});
         rows_.push_back({"Preset", pr[std::max(0, std::min(v.preset, np - 1))].label, 1, kPresetRef, false});
         rows_.push_back({});
         for (int i = 0; i < kVParamCount; i++) {
@@ -197,7 +201,9 @@ void Menu::change(int dir) {
             if (rows_[(size_t)i].ref == keep && rows_[(size_t)i].kind == 1) sel_ = i;
     } else if (page_ == Page::Video && hooks_.video) {
         VideoSettings& v = *hooks_.video;
-        if (r.ref == kPresetRef) {
+        if (r.ref == kRendererRef) {
+            v.renderer = ((v.renderer + dir) % kRendererCount + kRendererCount) % kRendererCount;
+        } else if (r.ref == kPresetRef) {
             int np;
             VideoSettings::presets(np);
             v.apply_preset(((v.preset + dir) % np + np) % np);   // Custom -> Off -> ... -> last preset -> Custom
@@ -239,10 +245,11 @@ void Menu::activate() {
         }
     } else if (page_ == Page::Video && hooks_.video) {
         if (r.kind == 2 && r.ref == -5) {
-            const int aspect = hooks_.video->aspect, integer = hooks_.video->integer_scale;
+            const int aspect = hooks_.video->aspect, integer = hooks_.video->integer_scale, rend = hooks_.video->renderer;
             *hooks_.video = VideoSettings();
-            hooks_.video->aspect = aspect;   // window layout choices are kept
+            hooks_.video->aspect = aspect;   // window layout choices and the renderer are kept
             hooks_.video->integer_scale = integer;
+            hooks_.video->renderer = rend;
             if (hooks_.video_changed) hooks_.video_changed();
             const int s = sel_;
             build_rows();
@@ -332,12 +339,15 @@ void Menu::render(uint32_t* argb) {
         info = wrap("Most DIP switch changes only take effect after a game reset (F3, or the entry above). "
                     "Settings are saved to bloodbro.ini.", 58);
     } else if (page_ == Page::Video) {
-        info = wrap(hooks_.gl_available
+        info = wrap(hooks_.shader_available && hooks_.shader_available()
                         ? "Changes apply at once and are saved to bloodbro.ini. Integer scaling and 4:3 look best with scanlines."
-                        : "OpenGL is not available on this system: scanlines, mask and the other effects are disabled.",
+                        : "Neither Vulkan nor OpenGL is in use: scanlines, mask and the other effects are disabled.",
                     58);
         if (!hooks_.bezel_available && sel_vparam && std::strcmp(sel_vparam->name, "Bezel (monitor frame)") == 0)
             info = wrap("No bezel image found. Put a PNG with a transparent screen area at bezel/bloodbro.png next to the program.", 58);
+        if (sr && sr->kind == 1 && sr->ref == kRendererRef)
+            info = wrap("In use: " + (hooks_.active_renderer ? hooks_.active_renderer() : std::string("?")) +
+                            ". Automatic tries Vulkan, then OpenGL, then SDL. Changes apply at once.", 58);
     } else if (sel_cheat) {
         if (!sel_cheat->error.empty()) info = wrap("Cannot use this cheat: " + sel_cheat->error, 58);
         else info = wrap(sel_cheat->comment, 58);

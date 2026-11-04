@@ -1,4 +1,4 @@
-// Video options shared by the OpenGL renderer, the F4 menu, the launcher and the ini file.
+// Video options shared by the Vulkan/OpenGL renderers, the F4 menu, the launcher and the ini file.
 #pragma once
 
 #include <algorithm>
@@ -22,6 +22,7 @@ struct VideoSettings {
     int integer_scale = 0; // 1 = whole-number scale factor
     int bezel = 0;         // 1 = use the bezel image if one is found
     int preset = 0;        // index into presets(), 0 = custom (set when a value is changed by hand)
+    int renderer = 0;      // 0 auto (Vulkan, then OpenGL, then SDL), 1 Vulkan, 2 OpenGL, 3 plain SDL renderer (no effects)
 
     // The values a preset sets. The user's own ("custom") values are kept separately, so picking a
     // preset and then "Custom" again brings them back.
@@ -81,8 +82,19 @@ struct VideoSettings {
 
     static constexpr const char* kFilters[3] = {"sharp", "linear", "nearest"};
     static constexpr const char* kAspects[3] = {"4:3", "pixel", "stretch"};
+    static constexpr const char* kRenderers[4] = {"auto", "vulkan", "opengl", "sdl"};
+    static constexpr const char* kRendererLabels[4] = {"Automatic (Vulkan, then OpenGL)", "Vulkan", "OpenGL", "Basic (SDL, no effects)"};
+
+    // "auto", "vulkan", "opengl"/"gl", "sdl"; -1 if unknown
+    static int renderer_index(const std::string& name) {
+        if (name == "gl") return 2;
+        for (int i = 0; i < 4; i++) if (name == kRenderers[i]) return i;
+        return -1;
+    }
 
     void load(const Ini& ini) {
+        const int r = renderer_index(ini.get("video", "renderer", kRenderers[renderer]));
+        if (r >= 0) renderer = r;
         scanlines = clamp(ini.get_int("video", "scanlines", scanlines), 0, 100);
         mask = clamp(ini.get_int("video", "mask", mask), 0, 100);
         curvature = clamp(ini.get_int("video", "curvature", curvature), 0, 100);
@@ -121,6 +133,7 @@ struct VideoSettings {
     void save(Ini& ini) const {
         int n;
         const Preset* p = presets(n);
+        ini.set("video", "renderer", kRenderers[clamp(renderer, 0, 3)]);
         ini.set("video", "preset", p[preset].name);
         ini.set_int("video", "scanlines", scanlines);
         ini.set_int("video", "mask", mask);
