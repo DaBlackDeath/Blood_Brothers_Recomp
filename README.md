@@ -49,9 +49,6 @@ sie, baut CMake ohne Vulkan-Renderer (Warnung beim Konfigurieren); abschalten ge
 - **Mit Argumenten** (z. B. ZIP auf die exe ziehen, `bloodbro.exe roms\bloodbro.zip`, `--play`, `--fullscreen` …)
   startet direkt das Spiel. `bloodbro.exe --help` zeigt alle Optionen.
 
-<p align="center">
-  <img src="https://imglink.cc/cdn/0scRPuMebI.png" alt="BloodBros bezel">
-</p>
 
 ## Menüs, Einstellungen und Cheats
 
@@ -89,10 +86,6 @@ Das Bild wird mit **Vulkan** oder **OpenGL 2.1** gezeichnet; beide nutzen densel
 (`src/shaders/crt.frag` für Vulkan, GLSL 1.20 in `src/gl_renderer.cpp` für OpenGL – bei Änderungen beide anpassen).
 Welcher Renderer läuft, steht unter `[video] renderer=` in der INI, im Launcher (Video → Renderer) oder auf der
 Kommandozeile (`--renderer auto|vulkan|opengl|sdl`, gilt nur für diesen Start):
-
-<p align="center">
-  <img src="https://imglink.cc/cdn/fgZ2i9eENS.png" alt="BloodBros">
-</p>
 
 | Wert | Verhalten |
 | --- | --- |
