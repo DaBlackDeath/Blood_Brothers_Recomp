@@ -1,3 +1,5 @@
+![crtfull](https://imglink.cc/cdn/r1bWtT00hK.png)
+
 # Blood Bros. (TAD Corporation, 1990) – statisch rekompilierter Windows-Port
 
 Windows-Port des Arcade-Spiels **Blood Bros.** (MAME-Set `bloodbro`). Das 68000-Programm des Spiels ist statisch
