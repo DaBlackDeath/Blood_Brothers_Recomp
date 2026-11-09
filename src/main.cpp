@@ -799,27 +799,24 @@ int main(int argc, char** argv) {
         init_flags |= SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD | (opt.nosound ? 0 : SDL_INIT_AUDIO);
     if (!SDL_Init(init_flags)) return fatal(gui, "Blood Bros. - SDL error", std::string("SDL could not start: ") + SDL_GetError());
 
-    // closes the window and everything that draws into it
-    auto close_video = [&]() {
-        gpu.reset();   // while the window still exists
-        if (bezel_tex) SDL_DestroyTexture(bezel_tex);
-        if (overlay_tex) SDL_DestroyTexture(overlay_tex);
-        if (texture) SDL_DestroyTexture(texture);
-        if (renderer) SDL_DestroyRenderer(renderer);
-        if (window) SDL_DestroyWindow(window);
-        bezel_tex = overlay_tex = texture = nullptr;
-        renderer = nullptr;
-        window = nullptr;
-    };
-    // Opens the window with the wanted renderer (0 auto, 1 Vulkan, 2 OpenGL, 3 SDL). If that does not work: the
-    // other GPU API, then the plain SDL renderer. The window stays hidden until a renderer works, so a failed
-    // Vulkan attempt does not flash a window.
-    auto open_video = [&](int choice, int ww, int wh, int wx, int wy, bool fs, std::string& err) -> bool {
-        const SDL_WindowFlags wflags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | (fs ? SDL_WINDOW_FULLSCREEN : 0);
+    if (!opt.headless) {
+        const double start_aspect = vs.aspect == 1 ? (double)Video::kWidth / Video::kHeight : 4.0 / 3.0;
+        int ww = Video::kWidth * opt.scale;
+        int wh = (int)(ww / start_aspect);
+        if (bezel.valid() && vs.bezel && bezel.has_window) {   // the game window inside the frame gets the usual size
+            ww = (int)(Video::kWidth * opt.scale * (double)bezel.w / bezel.win_w + 0.5);
+            wh = (int)(ww * (double)bezel.h / bezel.w + 0.5);
+        }
+        // hidden until a renderer works, so a failed Vulkan attempt does not flash a window
+        const SDL_WindowFlags wflags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | (opt.fullscreen ? SDL_WINDOW_FULLSCREEN : 0);
+
+        // GPU renderers in order of preference (CRT shader); if none works, the plain SDL renderer
         std::vector<RendererApi> apis;
-        if (choice == 0 || choice == 1) apis.push_back(RendererApi::Vulkan);
-        if (choice == 0 || choice == 2) apis.push_back(RendererApi::OpenGL);
-        if (choice == 1 || choice == 2) apis.push_back(choice == 1 ? RendererApi::OpenGL : RendererApi::Vulkan);   // explicitly chosen: the other API as fallback
+        if (renderer_choice == 0 || renderer_choice == 1) apis.push_back(RendererApi::Vulkan);
+        if (renderer_choice == 0 || renderer_choice == 2) apis.push_back(RendererApi::OpenGL);
+        if (renderer_choice == 1 || renderer_choice == 2) {   // explicitly chosen: the other API as fallback
+            apis.push_back(renderer_choice == 1 ? RendererApi::OpenGL : RendererApi::Vulkan);
+        }
         for (RendererApi api : apis) {
             std::unique_ptr<GpuRenderer> r = make_renderer(api);
             const char* api_name = api == RendererApi::Vulkan ? "Vulkan" : "OpenGL";
@@ -847,15 +844,15 @@ int main(int argc, char** argv) {
             if (bezel.valid()) gpu->set_bezel(bezel.argb.data(), bezel.w, bezel.h);
             std::printf("video: %s (%s)\n", gpu->api_name(), gpu->info().c_str());
         } else {
-            if (choice != 3) std::fprintf(stderr, "no Vulkan or OpenGL: using the plain renderer, no CRT effects\n");
+            if (renderer_choice != 3) std::fprintf(stderr, "no Vulkan or OpenGL: using the plain renderer, no CRT effects\n");
             window = SDL_CreateWindow("Blood Bros.", ww, wh, wflags);
-            if (!window) { err = std::string("Cannot create the window: ") + SDL_GetError(); return false; }
+            if (!window) return fatal(gui, "Blood Bros. - window error", std::string("Cannot create the window: ") + SDL_GetError());
             renderer = SDL_CreateRenderer(window, nullptr);
             if (!renderer) renderer = SDL_CreateRenderer(window, SDL_SOFTWARE_RENDERER);
-            if (!renderer) { err = std::string("Cannot create the renderer: ") + SDL_GetError(); close_video(); return false; }
+            if (!renderer) return fatal(gui, "Blood Bros. - video error", std::string("Cannot create the renderer: ") + SDL_GetError());
             SDL_SetRenderVSync(renderer, vsync ? 1 : 0);
             texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, Video::kWidth, Video::kHeight);
-            if (!texture) { err = std::string("Cannot create the screen texture: ") + SDL_GetError(); close_video(); return false; }
+            if (!texture) return fatal(gui, "Blood Bros. - video error", std::string("Cannot create the screen texture: ") + SDL_GetError());
             SDL_SetTextureScaleMode(texture, vs.filter == 1 ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
             overlay_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, Menu::kWidth, Menu::kHeight);
             if (overlay_tex) {
@@ -873,23 +870,8 @@ int main(int argc, char** argv) {
             const char* rname = SDL_GetRendererName(renderer);
             std::printf("video: SDL renderer (%s), no CRT effects\n", rname ? rname : "?");
         }
-        SDL_SetWindowPosition(window, wx, wy);
+        SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
         SDL_ShowWindow(window);
-        return true;
-    };
-    int start_w = 0, start_h = 0;   // window size at start-up (used when the window is reopened from fullscreen)
-
-    if (!opt.headless) {
-        const double start_aspect = vs.aspect == 1 ? (double)Video::kWidth / Video::kHeight : 4.0 / 3.0;
-        start_w = Video::kWidth * opt.scale;
-        start_h = (int)(start_w / start_aspect);
-        if (bezel.valid() && vs.bezel && bezel.has_window) {   // the game window inside the frame gets the usual size
-            start_w = (int)(Video::kWidth * opt.scale * (double)bezel.w / bezel.win_w + 0.5);
-            start_h = (int)(start_w * (double)bezel.h / bezel.w + 0.5);
-        }
-        std::string verr;
-        if (!open_video(renderer_choice, start_w, start_h, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, opt.fullscreen, verr))
-            return fatal(gui, "Blood Bros. - video error", verr);
 
         // pads are opened from the SDL_EVENT_*_ADDED events SDL queues at start-up (and on hotplug)
 
@@ -927,30 +909,9 @@ int main(int argc, char** argv) {
         ini.save(ini_path, "; bloodbro.ini - settings of bloodbro.exe. Saved by the game (F1 = DIP switches, F2 = cheats).");
     };
 
-    int shown_renderer = vs.renderer;   // the setting the window was opened with (a change in the F4 menu reopens it)
-    bool reopen_video = false;
     std::function<void()> mh_video_changed = [&]() {
         if (!gpu && texture) SDL_SetTextureScaleMode(texture, vs.filter == 1 ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
-        if (vs.renderer != shown_renderer) reopen_video = true;
         save_settings();
-    };
-    // F4 menu changed the renderer: open the window again (same place and size) with the new one
-    auto reopen = [&]() {
-        reopen_video = false;
-        shown_renderer = vs.renderer;
-        renderer_choice = vs.renderer;   // a --renderer from the command line no longer applies
-        if (!window) return;
-        int ww = start_w, wh = start_h, wx = SDL_WINDOWPOS_CENTERED, wy = SDL_WINDOWPOS_CENTERED;
-        if (!fullscreen) {
-            SDL_GetWindowSize(window, &ww, &wh);
-            SDL_GetWindowPosition(window, &wx, &wy);
-        }
-        close_video();
-        std::string verr;
-        if (!open_video(renderer_choice, ww, wh, wx, wy, fullscreen, verr)) {
-            fatal(gui, "Blood Bros. - video error", verr);
-            std::exit(1);
-        }
     };
 
     Menu menu;
@@ -964,16 +925,8 @@ int main(int argc, char** argv) {
         mh.cheats = n_cheats >= 0 ? &cheats : nullptr;
         mh.cheat_file_note = "No cheats available in this build.";
         mh.video = &vs;
-        mh.shader_available = [&]() { return gpu != nullptr; };
+        mh.shader_available = gpu != nullptr;
         mh.bezel_available = bezel.valid();
-        mh.active_renderer = [&]() -> std::string {
-            if (gpu) return gpu->api_name();
-            if (renderer) {
-                const char* n = SDL_GetRendererName(renderer);
-                return std::string("SDL (") + (n ? n : "?") + ", no effects)";
-            }
-            return "none";
-        };
         mh.video_changed = [&]() { if (mh_video_changed) mh_video_changed(); };
         menu.set_hooks(mh);
         cheats.on_change = save_settings;
@@ -1142,7 +1095,6 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        if (reopen_video) reopen();
 
         if (!opt.open_menu_page.empty() && !menu.active() && machine.frame_count() == opt.open_menu_frame)
             menu.open(opt.open_menu_page == "cheats" ? Menu::Page::Cheats : opt.open_menu_page == "video" ? Menu::Page::Video : Menu::Page::Dip);
@@ -1284,7 +1236,12 @@ int main(int argc, char** argv) {
         if (p.gc) SDL_CloseGamepad(p.gc);
         if (p.js) SDL_CloseJoystick(p.js);
     }
-    close_video();
+    gpu.reset();  // while the window still exists
+    if (bezel_tex) SDL_DestroyTexture(bezel_tex);
+    if (overlay_tex) SDL_DestroyTexture(overlay_tex);
+    if (texture) SDL_DestroyTexture(texture);
+    if (renderer) SDL_DestroyRenderer(renderer);
+    if (window) SDL_DestroyWindow(window);
     SDL_Quit();
     return 0;
 }

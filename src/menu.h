@@ -26,9 +26,8 @@ public:
         std::string cheat_file_note;             // shown on the cheat page when no cheats are loaded
         VideoSettings* video = nullptr;          // F4 page
         std::function<void()> video_changed;
-        std::function<bool()> shader_available;  // CRT effects need the Vulkan or OpenGL renderer
+        bool shader_available = false;           // CRT effects need the Vulkan or OpenGL renderer
         bool bezel_available = false;            // a bezel image was found
-        std::function<std::string()> active_renderer;   // the renderer in use, for the F4 page
     };
 
     static constexpr int kWidth = 512;   // overlay size; it is stretched over the game picture

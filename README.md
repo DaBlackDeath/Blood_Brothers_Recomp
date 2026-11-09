@@ -1,6 +1,3 @@
-<p align="center">
-  <img src="https://imglink.cc/cdn/r1bWtT00hK.png" alt="BloodBros bezel">
-</p>
 # Blood Bros. (TAD Corporation, 1990) – statisch rekompilierter Windows-Port
 
 Windows-Port des Arcade-Spiels **Blood Bros.** (MAME-Set `bloodbro`). Das 68000-Programm des Spiels ist statisch
@@ -49,10 +46,6 @@ sie, baut CMake ohne Vulkan-Renderer (Warnung beim Konfigurieren); abschalten ge
 - **Mit Argumenten** (z. B. ZIP auf die exe ziehen, `bloodbro.exe roms\bloodbro.zip`, `--play`, `--fullscreen` …)
   startet direkt das Spiel. `bloodbro.exe --help` zeigt alle Optionen.
 
-<p align="center">
-  <img src="https://imglink.cc/cdn/0scRPuMebI.png" alt="BloodBros bezel">
-</p>
-
 ## Menüs, Einstellungen und Cheats
 
 | Taste | Funktion |
@@ -89,10 +82,6 @@ Das Bild wird mit **Vulkan** oder **OpenGL 2.1** gezeichnet; beide nutzen densel
 (`src/shaders/crt.frag` für Vulkan, GLSL 1.20 in `src/gl_renderer.cpp` für OpenGL – bei Änderungen beide anpassen).
 Welcher Renderer läuft, steht unter `[video] renderer=` in der INI, im Launcher (Video → Renderer) oder auf der
 Kommandozeile (`--renderer auto|vulkan|opengl|sdl`, gilt nur für diesen Start):
-
-<p align="center">
-  <img src="https://imglink.cc/cdn/fgZ2i9eENS.png" alt="BloodBros">
-</p>
 
 | Wert | Verhalten |
 | --- | --- |
@@ -164,8 +153,8 @@ lokal aus deinem ROM erzeugt:
 bash tools/recomp_pipeline.sh roms/bloodbro.zip   # dump_prg.py + gen_recomp.py (nur python3)
 ```
 
-- `tools/dump_prg.py` holt das 512-KB-Programm aus der ZIP, `tools/gen_recomp.py` übersetzt jede der **17.012**
-  Instruktionen (ausgeführt + statisch erreichbar) in eine C++-Funktion und fasst sie zu 7.358 Basic-Blöcken zusammen.
+- `tools/dump_prg.py` holt das 512-KB-Programm aus der ZIP, `tools/gen_recomp.py` übersetzt jede der **20.809**
+  Instruktionen (ausgeführt + statisch erreichbar) in eine C++-Funktion und fasst sie zu 8.850 Basic-Blöcken zusammen.
   Eingaben: `data/analysis_bloodbro.json` (Funktionen, Sprungziele), `data/m68k_cycles.bin` (Zyklentabelle),
   `data/symbols_bloodbro.txt` (Namen als Kommentare im erzeugten Code).
 - `src/recomp_cpu.cpp` springt Block für Block durch den erzeugten Code und prüft Interrupts. Es gibt keinen
@@ -177,6 +166,13 @@ bash tools/recomp_pipeline.sh roms/bloodbro.zip   # dump_prg.py + gen_recomp.py 
   Zyklen, Bild, Ton nach jeder Scanline) ohne eine Abweichung.
 - Die Analyse-Daten stammen aus einem Ausführungs-Trace (`data/trace_bloodbro.txt`) dieser früheren Version;
   `tools/analyze_trace.py` (braucht `pip install capstone`) erzeugt daraus `data/analysis_bloodbro.json`.
+- Der Trace reicht nur bis Stage 4-2. Stages und Objekte springt das Spiel über Tabellen an
+  (`lea TABELLE,a3` / `movea.l (a3,d0.w),a3` / `jsr (a3)`); was der Trace nie sah, fehlte deshalb in der Übersetzung
+  (ab Stage 4-3: „code … that is not part of the recompiled program“). `tools/extend_analysis.py prg.bin
+  data/analysis_bloodbro.json` findet diese 11 Tabellen statisch, nimmt alle Einträge auf und disassembliert von dort
+  weiter (+3.797 Instruktionen, u. a. die Stages 4-3 bis 5-4 und 11 Objekttypen). Nach einem neuen Lauf von
+  `analyze_trace.py` muss es erneut laufen. Getestet mit `--cheat "Select Starting Stage=N" --cheat Invincibility
+  --autoplay SEED --stage-log PREFIX` für alle Stages.
 
 ## Das Spiel verstehen und verändern
 
